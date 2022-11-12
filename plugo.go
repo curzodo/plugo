@@ -77,6 +77,11 @@ func New(Id string) Plugo {
 	// Creates a goroutine that waits for the ctrl+c signal
 	go plugo.cleanup()
 
+    // Expose 'alive' function, child plugos use this function to determine if parent is alive
+    plugo.Expose("__alive__", func(_ ...any) []any {
+        return []any{true}
+    })
+
 	// If there is more than one program argument, then this is a child plugo
 	if len(os.Args) > 1 {
 		// Register with parent plugo
@@ -397,9 +402,21 @@ func decode(encodedValues []byte) []any {
 
 // Pings the parent once every ms milliseconds, if no response is received
 func (plugo *Plugo) ShutdownIfParentDies(ms int) {
-	for {
-		time.Sleep
-	}
+    go func() {
+        for {
+            resp, err := plugo.Call(plugo.ParentId, "__alive__")
+
+            if err != nil {
+	            termc <- syscall.SIGINT
+            }
+
+            if resp[0].(bool) != true {
+	            termc <- syscall.SIGINT
+            }
+
+            time.Sleep(ms*time.Millisecond)
+        }
+    }()
 }
 
 // Types
