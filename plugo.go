@@ -68,7 +68,7 @@ func New(Id string) Plugo {
 
 	plugo := Plugo{
 		Id,
-		nil,
+		"",
 		ln,
 		make(map[string]FuncSig),
 		make(map[string]*net.UnixConn),
@@ -125,7 +125,7 @@ func (plugo *Plugo) StartChild(path string) {
 	cmd.Start()
 }
 
-func (plugop *Plugo) Expose(functionName string, function FuncSig) {
+func (plugo *Plugo) Expose(functionName string, function FuncSig) {
 	plugo.Exposed[functionName] = function
 }
 
