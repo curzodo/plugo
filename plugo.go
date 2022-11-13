@@ -401,7 +401,7 @@ func decode(encodedValues []byte) []any {
 }
 
 // Pings the parent once every ms milliseconds, if no response is received
-func (plugo *Plugo) ShutdownIfParentDies(ms int64) {
+func (plugo *Plugo) ShutdownIfParentDies(ms int) {
     go func() {
         for {
             resp, err := plugo.Call(plugo.ParentId, "__alive__")
@@ -414,7 +414,7 @@ func (plugo *Plugo) ShutdownIfParentDies(ms int64) {
 	            termc <- syscall.SIGINT
             }
 
-            time.Sleep(ms*time.Millisecond)
+            time.Sleep(time.Duration(ms)*time.Millisecond)
         }
     }()
 }
