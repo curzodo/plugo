@@ -98,7 +98,7 @@ func _Add(x, y int) int {
 The mod program is built into an executable file using ```go build``` and then this exxecutable file is dragged into whatever folder you set the parent plugo to search for children in. If you download the repo and navigate into the example/parent directory and run the command ```go run .```, then you can see this code in action.
 
 # Limitations
-Currently, exposed functions only support returning booleans, integers, float32, float64, and string types. Exposed functions also only support receiving arguments of the same types.
+Currently, only certain types are able to be passed to and received from remote functions, these types are: booleans, integers (int), floats (float32 and float64) and strings.
 
 # Motivation
 I created this library because I wanted a fast and simple library to incorporate a plugin system to another one of my projects. I explored other options such as [gRPC](https://https://grpc.io/), Hashicorp's [go-plugin](https://github.com/hashicorp/go-plugin) and Go's very own [plugin](https://pkg.go.dev/plugin), but all of these solutions had drawbacks too significant to ignore, namely, the absurd amount of boilerplate involved, or lack of bi-directional calling (the Plugo library allows parents to call functions on children, and children to call functions on parents).
