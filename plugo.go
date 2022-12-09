@@ -27,7 +27,7 @@ const (
 
 var (
 	// These byte arrays are used to encode and decode datagrams.
-    delimiterZero = []byte{0, 0, 0, 0, 0, 0, 0, 0, 1}
+	delimiterZero  = []byte{0, 0, 0, 0, 0, 0, 0, 0, 1}
 	delimiterOne   = []byte{1, 1, 1, 1, 1, 1, 1, 1, 1}
 	delimiterTwo   = []byte{2, 2, 2, 2, 2, 2, 2, 2, 2}
 	delimiterThree = []byte{3, 3, 3, 3, 3, 3, 3, 3, 3}
@@ -59,11 +59,11 @@ type Plugo struct {
 	connections               map[string]*net.UnixConn
 }
 
-// This function creates a plugo. Where possible, plugoId should 
+// This function creates a plugo. Where possible, plugoId should
 // be unique to avoid conflicts with other plugos. waitTime is
-// the amount of time in milliseconds the parent plugo should 
+// the amount of time in milliseconds the parent plugo should
 // wait for this plugo to complete its setup before continuing
-// execution. If you do not intend on using the function 
+// execution. If you do not intend on using the function
 // StartChildren() within this process then the value of waitTime
 // does not matter.
 func New(plugoId string, waitTime int) Plugo {
@@ -110,20 +110,20 @@ func New(plugoId string, waitTime int) Plugo {
 	connection.SetReadDeadline(time.Now().Add(time.Second))
 
 	// Send this plugo's Id and requested wait time, prefixed by the
-    // registration byte, to its parent.
+	// registration byte, to its parent.
 	datagram := append([]byte{registrationByte}, []byte(plugoId)...)
 
-    // Separate plugoId and waitTime with delimiterZero
-    datagram = append(datagram, delimiterZero...)
-    
-    waitTimeBytes := make([]byte, 8)
+	// Separate plugoId and waitTime with delimiterZero
+	datagram = append(datagram, delimiterZero...)
+
+	waitTimeBytes := make([]byte, 8)
 
 	// Encode in little endian format.
 	for i := 0; i < len(waitTimeBytes); i++ {
 		waitTimeBytes[i] = byte(waitTime >> (i * 8))
 	}
 
-    datagram = append(datagram, waitTimeBytes...)
+	datagram = append(datagram, waitTimeBytes...)
 
 	connection.Write(datagram)
 
@@ -154,23 +154,23 @@ func New(plugoId string, waitTime int) Plugo {
 
 func (plugo Plugo) StartChildren(folderName string) {
 	// Check if folder already exists.
-    _, err := os.Stat(folderName)
+	_, err := os.Stat(folderName)
 
 	// If the folder already exists, start all of the plugos inside.
 	if err == nil {
 		childPlugos, _ := os.ReadDir(folderName)
 
 		for _, childPlugo := range childPlugos {
-            plugo.start(folderName + "/" + childPlugo.Name())
+			plugo.start(folderName + "/" + childPlugo.Name())
 		}
 
-        // handleRegistrations() returns the max amount of time this plugo
-        // has been requested to wait for one of its children to complete
-        // its setup.
-        waitTime := plugo.handleRegistrations()
+		// handleRegistrations() returns the max amount of time this plugo
+		// has been requested to wait for one of its children to complete
+		// its setup.
+		waitTime := plugo.handleRegistrations()
 
-        // Sleep for the requested wait time.
-        time.Sleep(time.Duration(waitTime) * time.Millisecond)
+		// Sleep for the requested wait time.
+		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
 
 	// If the folder does not exist, then create the folder.
@@ -213,18 +213,18 @@ func (plugo Plugo) Unexpose(functionId string) {
 // This function gracefully shuts the plugo down. It stops listening
 // for incoming connections and closes all existing connections.
 func (plugo Plugo) Shutdown() {
-    // Close listener.
-    plugo.listener.Close()
+	// Close listener.
+	plugo.listener.Close()
 
-    // Close all stored connections.
-    for _, connection := range plugo.connections {
-        connection.Close()
-    }
+	// Close all stored connections.
+	for _, connection := range plugo.connections {
+		connection.Close()
+	}
 }
 
-func (plugo Plugo) CheckConnection(plugoId string) (bool) {
-    _, ok := plugo.connections[plugoId]
-    return ok
+func (plugo Plugo) CheckConnection(plugoId string) bool {
+	_, ok := plugo.connections[plugoId]
+	return ok
 }
 
 // This function remotely calls functions exposed by connected plugos.
@@ -244,8 +244,8 @@ func (plugo Plugo) CallWithContext(
 
 	if !ok {
 		return nil, errors.New(
-            "A plugo with Id " + plugoId + " is not connected to this plugo.",
-        )
+			"A plugo with Id " + plugoId + " is not connected to this plugo.",
+		)
 	}
 
 	// Construct value and error channels.
@@ -346,78 +346,78 @@ func (plugo Plugo) CallWithTimeout(
 // received from a plugo. This plugo will wait for that amount of time
 // to ensure all plugos are ready.
 func (plugo Plugo) handleRegistrations() int {
-    // Create mutex lock on waitTimeMax value to prevent race conditions.
-    waitTimeMax := struct {
-        sync.Mutex
-        value int
-    } {
-        sync.Mutex{},
-        0,
-    }
+	// Create mutex lock on waitTimeMax value to prevent race conditions.
+	waitTimeMax := struct {
+		sync.Mutex
+		value int
+	}{
+		sync.Mutex{},
+		0,
+	}
 
 	go func() {
-        for {
-		    connection, err := plugo.listener.AcceptUnix()
+		for {
+			connection, err := plugo.listener.AcceptUnix()
 
-		    if err != nil {
-			    continue
-		    }
+			if err != nil {
+				continue
+			}
 
-		    // Start a thread to handle the new incoming connection.
-		    go func() {
-			    // Set the connection deadline to one second.
-			    connection.SetReadDeadline(time.Now().Add(time.Second))
+			// Start a thread to handle the new incoming connection.
+			go func() {
+				// Set the connection deadline to one second.
+				connection.SetReadDeadline(time.Now().Add(time.Second))
 
-			    datagram := make([]byte, 4096)
-			    datagramLength, err := connection.Read(datagram)
-			    checkError(err)
+				datagram := make([]byte, 4096)
+				datagramLength, err := connection.Read(datagram)
+				checkError(err)
 
-			    // Unset the connection read deadline.
-			    connection.SetReadDeadline(time.Time{})
+				// Unset the connection read deadline.
+				connection.SetReadDeadline(time.Time{})
 
-			    // Check if this datagram is prefixed with a registration byte.
-			    if datagram[0] != registrationByte {
-				    return
-			    }
+				// Check if this datagram is prefixed with a registration byte.
+				if datagram[0] != registrationByte {
+					return
+				}
 
-			    // Write registration byte back, and add the child plugo's Id and
-			    // connection to this plugo's array of connections.
-			    connection.Write([]byte{registrationByte})
+				// Write registration byte back, and add the child plugo's Id and
+				// connection to this plugo's array of connections.
+				connection.Write([]byte{registrationByte})
 
-                // Split remaining datagram into plugoId and requested wait time.
-                byteSplit := bytes.Split(datagram[1:datagramLength], delimiterZero)
+				// Split remaining datagram into plugoId and requested wait time.
+				byteSplit := bytes.Split(datagram[1:datagramLength], delimiterZero)
 
-			    // Store this connection with the other plugo's Id.
-			    registeringPlugoId := string(byteSplit[0])
-			    plugo.connections[registeringPlugoId] = connection
+				// Store this connection with the other plugo's Id.
+				registeringPlugoId := string(byteSplit[0])
+				plugo.connections[registeringPlugoId] = connection
 
-			    // Handle this connection for future communications.
-			    go plugo.handleConnection(registeringPlugoId, connection)
+				// Handle this connection for future communications.
+				go plugo.handleConnection(registeringPlugoId, connection)
 
-                // Extract waitTime request from plugo.
-			    var waitTime int = 0
-                for i, b := range byteSplit[1] {
-				    waitTime += int(b) << (i * 8)
-                }
+				// Extract waitTime request from plugo.
+				var waitTime int = 0
+				for i, b := range byteSplit[1] {
+					waitTime += int(b) << (i * 8)
+				}
 
-                // Lock value.
-                waitTimeMax.Lock()
+				// Lock value.
+				waitTimeMax.Lock()
 
-                if waitTime > waitTimeMax.value {
-                    waitTimeMax.value = waitTime
-                }
+				if waitTime > waitTimeMax.value {
+					waitTimeMax.value = waitTime
+				}
 
-                // Unlock value.
-                waitTimeMax.Unlock()
-		    }()
-	    }
-    }()
+				// Unlock value.
+				waitTimeMax.Unlock()
+			}()
+		}
+	}()
 
-    // Wait one second for all initial registrations to take place.
-    time.Sleep(time.Second)
+	// Wait one second for all initial registrations to take place.
+	time.Sleep(time.Second)
 
-    // Return the highest wait time requested.
-    return waitTimeMax.value
+	// Return the highest wait time requested.
+	return waitTimeMax.value
 }
 
 // This function handles connections between plugos.
