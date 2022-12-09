@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"time"
@@ -16,11 +17,12 @@ import (
 const (
 	// These bytes prefix the datagrams sent between plugos.
 	registrationByte         = byte(1)
-	functionCallByte         = byte(2)
-	functionCallResponseByte = byte(3)
+	readyByte                = byte(2)
+	functionCallByte         = byte(3)
+	functionCallResponseByte = byte(4)
 
 	// Error bytes
-	functionNotFoundByte = byte(4)
+	functionNotFoundByte = byte(5)
 
 	network = "unix"
 )
@@ -59,29 +61,33 @@ type Plugo struct {
 	connections               map[string]*net.UnixConn
 }
 
-// This function creates a plugo. Where possible, plugoId should
-// be unique to avoid conflicts with other plugos. waitTime is
-// the amount of time in milliseconds the parent plugo should
-// wait for this plugo to complete its setup before continuing
-// execution. If you do not intend on using the function
-// StartChildren() within this process then the value of waitTime
-// does not matter.
-func New(plugoId string, waitTime int) Plugo {
+// This function creates a plugo. plugoId should
+// be unique to avoid conflicts with other plugos.
+func New(plugoId string) (*Plugo, error) {
 	// Create a unix socket for this plugo.
 	socketDirectoryName, err := os.MkdirTemp("", "tmp")
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Use the Id of this plugo to create the unix socket address.
 	socketAddressString := socketDirectoryName + "/" + plugoId + ".sock"
 	socketAddress, err := net.ResolveUnixAddr(network, socketAddressString)
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Useful for local testing.
 	// print(socketAddress.String())
 
 	// Create the listener.
 	listener, err := net.ListenUnix(network, socketAddress)
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Instantiate the plugo struct.
 	plugo := Plugo{
@@ -95,49 +101,47 @@ func New(plugoId string, waitTime int) Plugo {
 
 	// Check if this plugo was started by another plugo.
 	if len(os.Args) < 3 {
-		return plugo
+		return &plugo, nil
 	}
 
 	// Get this plugo's parent's socket address.
 	parentSocketAddress, err := net.ResolveUnixAddr(network, os.Args[2])
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Create a connection with this plugo's parent.
 	connection, err := net.DialUnix(network, nil, parentSocketAddress)
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Set the connection deadline to given time.
 	connection.SetReadDeadline(time.Now().Add(time.Second))
 
-	// Send this plugo's Id and requested wait time, prefixed by the
+	// Send this plugo's Id, prefixed by the
 	// registration byte, to its parent.
 	datagram := append([]byte{registrationByte}, []byte(plugoId)...)
-
-	// Separate plugoId and waitTime with delimiterZero
-	datagram = append(datagram, delimiterZero...)
-
-	waitTimeBytes := make([]byte, 8)
-
-	// Encode in little endian format.
-	for i := 0; i < len(waitTimeBytes); i++ {
-		waitTimeBytes[i] = byte(waitTime >> (i * 8))
-	}
-
-	datagram = append(datagram, waitTimeBytes...)
 
 	connection.Write(datagram)
 
 	// Expect a single registration byte as a response.
 	response := make([]byte, 1)
 	_, err = connection.Read(response)
-	checkError(err)
+
+	if err != nil {
+		return nil, err
+	}
 
 	// Unset the connection read deadline.
 	connection.SetReadDeadline(time.Time{})
 
-	// Panic if this plugo cannot register with its parent.
 	if response[0] != registrationByte {
-		panic("This plugo could not register with its parent.")
+		return nil, errors.New(
+			"This plugo could not register with its parent.",
+		)
 	}
 
 	// Store this plugo's parent's Id.
@@ -149,10 +153,27 @@ func New(plugoId string, waitTime int) Plugo {
 	// Handle connection for future communications.
 	go plugo.handleConnection(plugo.parentId, connection)
 
-	return plugo
+	return &plugo, nil
 }
 
-func (plugo Plugo) StartChildren(folderName string) {
+// This function send informs the parent plugo that this
+// plugo has finished setting up and that the parent
+// plugo should continue its execution.
+func (plugo *Plugo) Ready() error {
+	connection, ok := plugo.connections[plugo.parentId]
+
+	if !ok {
+		return errors.New(
+			"Parent plugo connection could not be found.",
+		)
+	}
+
+	connection.Write([]byte{readyByte})
+
+	return nil
+}
+
+func (plugo *Plugo) StartChildren(folderName string) {
 	// Check if folder already exists.
 	_, err := os.Stat(folderName)
 
@@ -164,13 +185,7 @@ func (plugo Plugo) StartChildren(folderName string) {
 			plugo.start(folderName + "/" + childPlugo.Name())
 		}
 
-		// handleRegistrations() returns the max amount of time this plugo
-		// has been requested to wait for one of its children to complete
-		// its setup.
-		waitTime := plugo.handleRegistrations()
-
-		// Sleep for the requested wait time.
-		time.Sleep(time.Duration(waitTime) * time.Millisecond)
+		plugo.handleRegistrations()
 	}
 
 	// If the folder does not exist, then create the folder.
@@ -184,7 +199,7 @@ func (plugo Plugo) StartChildren(folderName string) {
 
 // This function starts and attempts to connect to another plugo.
 // Path is the path to an executable.
-func (plugo Plugo) start(path string) {
+func (plugo *Plugo) start(path string) {
 	cmd := exec.Command(path, plugo.id, plugo.listener.Addr().String())
 	cmd.Start()
 }
@@ -193,7 +208,7 @@ func (plugo Plugo) start(path string) {
 // type func(...any) []any it will be not be called using reflect, resulting
 // in better performance. functionId is the Id through which other
 // plugos may call the function using the plugo.Call() function.
-func (plugo Plugo) Expose(functionId string, function any) {
+func (plugo *Plugo) Expose(functionId string, function any) {
 	functionType := reflect.TypeOf(function).String()
 
 	if functionType == "func(...interface {}) []interface {}" {
@@ -205,14 +220,17 @@ func (plugo Plugo) Expose(functionId string, function any) {
 }
 
 // This function unexposes the function with the given functionId.
-func (plugo Plugo) Unexpose(functionId string) {
+func (plugo *Plugo) Unexpose(functionId string) {
 	delete(plugo.exposedFunctions, functionId)
 	delete(plugo.exposedFunctionsNoReflect, functionId)
 }
 
 // This function gracefully shuts the plugo down. It stops listening
 // for incoming connections and closes all existing connections.
-func (plugo Plugo) Shutdown() {
+func (plugo *Plugo) Shutdown() {
+	// Obtain socket address from listener.
+	socketAddress := plugo.listener.Addr().String()
+
 	// Close listener.
 	plugo.listener.Close()
 
@@ -220,9 +238,13 @@ func (plugo Plugo) Shutdown() {
 	for _, connection := range plugo.connections {
 		connection.Close()
 	}
+
+	// Delete temporary directory.
+	directoryPath := filepath.Dir(socketAddress)
+	os.Remove(directoryPath)
 }
 
-func (plugo Plugo) CheckConnection(plugoId string) bool {
+func (plugo *Plugo) CheckConnection(plugoId string) bool {
 	_, ok := plugo.connections[plugoId]
 	return ok
 }
@@ -233,7 +255,7 @@ func (plugo Plugo) CheckConnection(plugoId string) bool {
 // be called (not necessarily the function name). ctx is a context
 // that can be used to construct a timeout. arguments are what the
 // remote function will be passed as arguments.
-func (plugo Plugo) CallWithContext(
+func (plugo *Plugo) CallWithContext(
 	plugoId string,
 	functionId string,
 	ctx context.Context,
@@ -319,7 +341,7 @@ func (plugo Plugo) CallWithContext(
 // amount of time in milliseconds the function will wait for a reply
 // from the called remote function, and arguments are what the remote
 // function will be passed as arguments.
-func (plugo Plugo) CallWithTimeout(
+func (plugo *Plugo) CallWithTimeout(
 	plugoId string,
 	functionId string,
 	timeout int,
@@ -341,19 +363,11 @@ func (plugo Plugo) CallWithTimeout(
 }
 
 // This function handles the registration and connection of plugos to this
-// plugo. It will return after not receiving any connection requests for
-// a single second. Its return value is the highest amount of waiting time
-// received from a plugo. This plugo will wait for that amount of time
-// to ensure all plugos are ready.
-func (plugo Plugo) handleRegistrations() int {
-	// Create mutex lock on waitTimeMax value to prevent race conditions.
-	waitTimeMax := struct {
-		sync.Mutex
-		value int
-	}{
-		sync.Mutex{},
-		0,
-	}
+// plugo. Any connections made within one second of this function being
+// called will have the ability to force this plugo to wait for an
+// additional ready signal before continuing program execution.
+func (plugo *Plugo) handleRegistrations() {
+	var waitGroup sync.WaitGroup
 
 	go func() {
 		for {
@@ -370,45 +384,52 @@ func (plugo Plugo) handleRegistrations() int {
 
 				datagram := make([]byte, 4096)
 				datagramLength, err := connection.Read(datagram)
-				checkError(err)
+
+				if err != nil {
+					connection.Close()
+					return
+				}
 
 				// Unset the connection read deadline.
 				connection.SetReadDeadline(time.Time{})
 
 				// Check if this datagram is prefixed with a registration byte.
 				if datagram[0] != registrationByte {
+					connection.Close()
 					return
 				}
+
+				// Extract plugoId from datagram.
+				childPlugoId := string(datagram[1:datagramLength])
+
+				// Add one to wait group.
+				waitGroup.Add(1)
 
 				// Write registration byte back, and add the child plugo's Id and
 				// connection to this plugo's array of connections.
 				connection.Write([]byte{registrationByte})
 
-				// Split remaining datagram into plugoId and requested wait time.
-				byteSplit := bytes.Split(datagram[1:datagramLength], delimiterZero)
+				// Wait for ready byte.
+				datagram = make([]byte, 1)
+				_, err = connection.Read(datagram)
+
+				if err != nil {
+					connection.Close()
+					return
+				}
+
+				if datagram[0] != readyByte {
+					connection.Close()
+					return
+				}
 
 				// Store this connection with the other plugo's Id.
-				registeringPlugoId := string(byteSplit[0])
-				plugo.connections[registeringPlugoId] = connection
+				plugo.connections[childPlugoId] = connection
 
 				// Handle this connection for future communications.
-				go plugo.handleConnection(registeringPlugoId, connection)
+				go plugo.handleConnection(childPlugoId, connection)
 
-				// Extract waitTime request from plugo.
-				var waitTime int = 0
-				for i, b := range byteSplit[1] {
-					waitTime += int(b) << (i * 8)
-				}
-
-				// Lock value.
-				waitTimeMax.Lock()
-
-				if waitTime > waitTimeMax.value {
-					waitTimeMax.value = waitTime
-				}
-
-				// Unlock value.
-				waitTimeMax.Unlock()
+				waitGroup.Done()
 			}()
 		}
 	}()
@@ -416,12 +437,12 @@ func (plugo Plugo) handleRegistrations() int {
 	// Wait one second for all initial registrations to take place.
 	time.Sleep(time.Second)
 
-	// Return the highest wait time requested.
-	return waitTimeMax.value
+	// Wait for all registered plugos to send ready signal.
+	waitGroup.Wait()
 }
 
 // This function handles connections between plugos.
-func (plugo Plugo) handleConnection(
+func (plugo *Plugo) handleConnection(
 	connectedPlugoId string,
 	connection *net.UnixConn,
 ) {
@@ -451,7 +472,7 @@ func (plugo Plugo) handleConnection(
 }
 
 // This function handles datagrams that are prefixed with the functionCallByte.
-func (plugo Plugo) handleFunctionCall(
+func (plugo *Plugo) handleFunctionCall(
 	connection *net.UnixConn,
 	datagram []byte,
 ) {
@@ -515,7 +536,7 @@ func (plugo Plugo) handleFunctionCall(
 
 }
 
-func (plugo Plugo) handleFunctionCallResponse(
+func (plugo *Plugo) handleFunctionCallResponse(
 	connection *net.UnixConn,
 	datagram []byte,
 ) {
@@ -702,11 +723,4 @@ func decode(valuesAsBytes []byte) []any {
 	}
 
 	return decodedValues
-}
-
-// Helper functions
-func checkError(err error) {
-	if err != nil {
-		panic(err)
-	}
 }
