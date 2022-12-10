@@ -201,6 +201,8 @@ func (plugo *Plugo) StartChildren(folderName string) {
 // Path is the path to an executable.
 func (plugo *Plugo) start(path string) {
 	cmd := exec.Command(path, plugo.id, plugo.listener.Addr().String())
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
 	cmd.Start()
 }
 

@@ -3,17 +3,21 @@ package main
 import (
 	"github.com/curzodo/plugo"
 	"time"
+    "fmt"
 )
 
 func main() {
 	// Create a plugo with the Id "Child".
 	p, _ := plugo.New("Child")
 
-	// Expose the add() function defined below.
+	// Expose the _Add() function defined below.
 	p.Expose("_Add", _Add)
 
+    // Expose the _PrintFromChild() function defined below.
+    p.Expose("_PrintFromChild", _PrintFromChild)
+
 	// Do some fake setting up.
-	time.Sleep(5 * time.Second)
+	time.Sleep(time.Second)
 
 	// Signal to the parent plugo that this plugo is ready.
 	p.Ready()
@@ -39,4 +43,8 @@ func main() {
 
 func _Add(x, y int) int {
 	return x + y
+}
+
+func _PrintFromChild() {
+    fmt.Println("This was printed from a child plugo.")
 }
