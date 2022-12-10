@@ -12,53 +12,78 @@ import (
 	"reflect"
 	"sync"
 	"time"
+    "github.com/bytedance/sonic"
 )
 
 const (
-	// These bytes prefix the datagrams sent between plugos.
-	registrationByte         = byte(1)
-	readyByte                = byte(2)
-	functionCallByte         = byte(3)
-	functionCallResponseByte = byte(4)
+    // Datagram types.
+    registration = byte(0)
+    registrationResponse = byte(1)
+    ready = byte(2)
+    functionCall = byte(3)
+    functionCallResponse = byte(4)
 
-	// Error bytes
-	functionNotFoundByte = byte(5)
+	// Error types.
+	FunctionNotFound = byte(0)
+    NoResponse = byte(1)
 
 	network = "unix"
 )
 
 var (
-	// These byte arrays are used to encode and decode datagrams.
-	delimiterZero  = []byte{0, 0, 0, 0, 0, 0, 0, 0, 1}
-	delimiterOne   = []byte{1, 1, 1, 1, 1, 1, 1, 1, 1}
-	delimiterTwo   = []byte{2, 2, 2, 2, 2, 2, 2, 2, 2}
-	delimiterThree = []byte{3, 3, 3, 3, 3, 3, 3, 3, 3}
-
-	// When one plugo calls several functions on another almost simultaneously,
-	// the calling plugo needs to be able to return the correct return values to
-	// the correct function call request, all on the same connection. This is
-	// accomplished using identifiers and channels which wait for called functions
-	// responses encoded into bytes. Think of it as multiplexing a single pipeline
-	// in order to achieve multiple connections with just a single connection.
-	channels = struct {
-		sync.Mutex
-		m map[int][]chan any
-	}{
-		sync.Mutex{},
-		make(map[int][]chan any),
-	}
+    // If plugo A calls function f on plugo B, and before f has returned values
+    // to plugo A, plugo A calls function g on plugo B, which returns values
+    // instantly, then how will plugo A know which return values belong to
+    // which request, given that all requests occur over the same connection?
+    // The solution is a form of multiplexing using Ids and channels that wait
+    // for return values from function call requests. Each connected plugo has
+    // its own dedicated map of channels.
+    functionResponseChannels = make(map[string]struct {
+        sync.Mutex
+        m map[int]chan []byte
+    })
 )
 
 type Plugo struct {
-	id       string
-	parentId string
-	// ExposedFunctions will be called using reflect.Call(), whereas
-	// FastExposedFunctions will be called directly, but they must be
-	// of type func(any...) []any
+	Id       string
+	ParentId string
 	exposedFunctions          map[string]reflect.Value
-	exposedFunctionsNoReflect map[string]func(...any) []any
 	listener                  *net.UnixListener
 	connections               map[string]*net.UnixConn
+    MemoryAllocation int
+}
+
+// Datagrams are used for inter-plugo communication. Depending on the type,
+// the Payload will be unmarshalled into one of the structs defined below.
+type datagram struct {
+    Type byte
+    Payload []byte
+}
+
+// This datagram is sent by a child plugo to its parent, over the connection that
+// was passed as an argument to the program. The child sends its own Id.
+type registrationRequest struct {
+    PlugoId string
+}
+
+// This datagram is sent by a parent plugo to a child in response to a 
+// registrationRequest datagram. The parent sents its own Id.
+type registrationResponse struct {
+    PlugoId string
+}
+
+type readySignal struct {
+    FunctionNames []string
+}
+
+type functionCallRequest struct {
+    FunctionCallRequestId int FunctionId string
+    Arguments []byte
+}
+
+type functionCallResponse struct {
+    FunctionCallRequestId int
+    ReturnValues []byte
 }
 
 // This function creates a plugo. plugoId should
@@ -79,9 +104,6 @@ func New(plugoId string) (*Plugo, error) {
 		return nil, err
 	}
 
-	// Useful for local testing.
-	// print(socketAddress.String())
-
 	// Create the listener.
 	listener, err := net.ListenUnix(network, socketAddress)
 
@@ -94,13 +116,13 @@ func New(plugoId string) (*Plugo, error) {
 		plugoId,
 		"",
 		make(map[string]reflect.Value),
-		make(map[string]func(...any) []any),
 		listener,
 		make(map[string]*net.UnixConn),
+        4096,
 	}
 
 	// Check if this plugo was started by another plugo.
-	if len(os.Args) < 3 {
+	if len(os.Args) < 2 {
 		return &plugo, nil
 	}
 
@@ -112,48 +134,90 @@ func New(plugoId string) (*Plugo, error) {
 	}
 
 	// Create a connection with this plugo's parent.
-	connection, err := net.DialUnix(network, nil, parentSocketAddress)
+	parentConnection, err := net.DialUnix(network, nil, parentSocketAddress)
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Set the connection deadline to given time.
-	connection.SetReadDeadline(time.Now().Add(time.Second))
+    err := plugo.registerWithParent(parentConnection)
 
-	// Send this plugo's Id, prefixed by the
-	// registration byte, to its parent.
-	datagram := append([]byte{registrationByte}, []byte(plugoId)...)
-
-	connection.Write(datagram)
-
-	// Expect a single registration byte as a response.
-	response := make([]byte, 1)
-	_, err = connection.Read(response)
-
-	if err != nil {
-		return nil, err
-	}
-
-	// Unset the connection read deadline.
-	connection.SetReadDeadline(time.Time{})
-
-	if response[0] != registrationByte {
-		return nil, errors.New(
-			"This plugo could not register with its parent.",
-		)
-	}
-
-	// Store this plugo's parent's Id.
-	plugo.parentId = os.Args[1]
-
-	// Store this connection with the other plugo's Id.
-	plugo.connections[plugo.parentId] = connection
-
-	// Handle connection for future communications.
-	go plugo.handleConnection(plugo.parentId, connection)
+    if err != nil {
+        return nil, err
+    }
 
 	return &plugo, nil
+}
+
+// This function handles the registration process between a child and a parent,
+// from the child's point of view.
+func (plugo *Plugo) registerWithParent(parentConnection *net.UnixConn) error {
+    // Construct registration request datagram.
+    payload := registrationRequest {
+        plugo.id,
+    }
+
+    request := datagram {
+        registration,
+        payload,
+    }
+
+    // Marshal request into bytes.
+    requestAsBytes, err := sonic.Marshal(&request)
+
+    if err != nil {
+        return err
+    }
+
+    // Send datagram to parent.
+    parentConnection.Write(requestAsBytes)
+
+    // Prepare for response.
+    response := make([]byte, plugo.MemoryAllocation)
+
+    // Set read deadline to one second.
+    parentConnection.SetReadDeadline(time.Now().Add(time.Second()))
+
+    // Await response.
+    responseLength, err := parentConnection.Read(response)
+    
+    // Unset read deadline.
+    parentConnection.SetReadDeadline(time.Time{})
+
+    if err != nil {
+        return err
+    }
+
+    // Unmarshal bytes into datagram.
+    var datagram datagram
+    err := sonic.Unmarshal(response[0:responseLength], &datagram)
+
+    if err != nil {
+        return err
+    }
+
+    if datagram.Id != registration {
+        return errors.New(
+            "The registration request response datagram's Id was "+
+            "not correct. Received " + string(datagram.Id) +
+            " instead of " + string(registration) + ".",
+        )
+    }
+
+    // Unmarshal payload into registrationRequestResponse.
+    var registrationRequestResponse registrationRequestResponse
+    err := sonic.Unmarshal(datagram.Payload, &registrationRequestResponse)
+
+    if err != nil {
+        return err
+    }
+    
+    // Store this plugo's parent's Id connection.
+    parentId = registrationRequestResponse.plugoId
+    plugo.parentId = parentId
+    plugo.connections[parentId] = parentConnection
+
+    return nil
 }
 
 // This function send informs the parent plugo that this
@@ -173,7 +237,7 @@ func (plugo *Plugo) Ready() error {
 	return nil
 }
 
-func (plugo *Plugo) StartChildren(folderName string) {
+func (plugo *Plugo) StartChildren(folderName string) error {
 	// Check if folder already exists.
 	_, err := os.Stat(folderName)
 
@@ -181,20 +245,154 @@ func (plugo *Plugo) StartChildren(folderName string) {
 	if err == nil {
 		childPlugos, _ := os.ReadDir(folderName)
 
+        if err != nil {
+            return err
+        }
+
+        // Create a channel so that the plugo knows when the registration
+        // process has been completed. This channel will consist of a map
+        // of plugos who have requested certain functions be called. The
+        // key is the plugo, and the associated value is an array of function
+        // names to be called.
+        done := make(chan map[string][]string)
+
+        go plugo.handleRegistration(done)
+
 		for _, childPlugo := range childPlugos {
 			plugo.start(folderName + "/" + childPlugo.Name())
 		}
+        
+        // Wait for map to be returned.
+        mapPlugoIdFunctionName<-done 
 
-		plugo.handleRegistrations()
+        return nil
 	}
 
-	// If the folder does not exist, then create the folder.
+	// If the error is that the folder does not exist, then create the folder.
 	if errors.Is(err, os.ErrNotExist) {
 		// Create folder
 		os.Mkdir(folderName, os.ModePerm)
 	} else if err != nil {
-		panic(err)
+		return err
 	}
+}
+
+func (plugo *Plugo) handleRegistration(done chan map[string][]string) {
+    // Create a wait group to wait for each plugo that registers
+    // to signal that it is ready.
+    var waitGroup sync.Waitgroup
+
+    functionCallRequests := make(map[string][]string)
+
+    go func() {
+    for {
+        connection, err := plugo.listener.AcceptUnix()
+
+        if err != nil {
+            continue
+        }
+
+        go func() {
+            datagramBytes := make([]byte, plugo.MemoryAllocation)
+
+            // Listen for incoming registration requests over this connection.
+            datagramBytesLength, err := connection.Read(datagramBytes)
+
+            if err != nil {
+                continue
+            }
+
+            // Unmarshal bytes into datagram.
+            var datagram datagram
+            err := sonic.Unmarshal(datagramBytes[0:datagramBytesLength], &datagram)
+
+            if err != nil {
+                continue
+            }
+
+            // Ensure datagram type is registration.
+            if datagram.Type != registration {
+                continue
+            }
+
+            // Unmarshal payload bytes into registrationRequest.
+            var registrationRequest registrationRequest
+            err := sonic.Unmarshal(datagram.Payload, &registrationRequest)
+
+            if err != nil {
+                continue
+            }
+
+            connectedPlugoId := registrationRequest.PlugoId
+            plugo.connections[connectedPlugoId] = connection
+
+            // Respond with registrationResponse.
+            payload := registrationResponse {
+                plugo.Id,
+            }
+            
+            datagram := datagram {
+                registrationResponse,
+                payload,
+            }
+
+            connection.Write(datagram)
+
+            // Add one to wait group.
+            waitGroup.add(1)
+
+            // Wait for ready signal.
+            datagramBytes = make([]byte, plugo.MemoryAllocation)
+            datagramBytesLength, err = connection.Read(datagramBytes)
+
+            if err != nil {
+                wg.Done()
+                continue
+            }
+
+            // Unmarshal bytes into datagram.
+            var datagram datagram
+            err := sonic.Unmarshal(datagramBytes, &datagram)
+
+            if err != nil {
+                wg.Done()
+                continue
+            }
+
+            // Check if datagram type is ready.
+            if datagram.Type != ready {
+                wg.Done()
+                continue
+            }
+
+            // Unmarshal payload bytes into readySignal.
+            var readySignal readySignal
+            err := sonic.Unmarshal(datagram.Payload, &readySignal)
+
+            if err != nil {
+                wg.Done()
+                continue
+            }
+
+            // Store function call requests.
+            functionCallRequests[connectedPlugoId] = readySignal.FunctionNames
+
+            // Store connectedPlugoId and connection..
+            plugo.connections[connectedPlugoId] = connection
+
+            wg.Done()
+        }
+    }
+    }
+
+    // Sleep for one hundred milliseconds to allow plugos to register.
+    time.Sleep(100 * time.Millisecond)
+    
+    // Wait for all registered plugos to signal that they are ready.
+    waitGroup.Wait()
+
+    // Signal to main thread that the registration process is complete.
+    done <- true
 }
 
 // This function starts and attempts to connect to another plugo.

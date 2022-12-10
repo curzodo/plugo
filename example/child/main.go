@@ -9,8 +9,8 @@ func main() {
 	// Create a plugo with the Id "Child".
 	p, _ := plugo.New("Child")
 
-	// Expose the _Add() function defined below.
-	p.Expose("_Add", _Add)
+	// Expose the _add() function defined below.
+	p.Expose("_add", _add)
 
 	// Do some fake setting up.
 	time.Sleep(time.Second)
@@ -19,7 +19,7 @@ func main() {
 	p.Ready()
 
 	// Call the Message() function defined in the Parent plugo.
-	p.CallWithTimeout("Parent", "_Message", 1000, "Hi Parent")
+	p.CallWithTimeout("Parent", "_message", 1000, "Hi Parent")
 
 	// Create a loop that tests the connection with the parent plugo.
 	// When the CheckConnection() function returns false, then the parent is
@@ -37,6 +37,6 @@ func main() {
 	}
 }
 
-func _Add(x, y int) int {
+func _add(x, y int) int {
 	return x + y
 }
