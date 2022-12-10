@@ -16,11 +16,6 @@ func main() {
 	// or create a folder named "plugos" if none exists.
 	p.StartChildren("plugos")
 
-    // Call the _PrintFromChild() function. The child's
-    // fmt.Println() call should appear in this process'
-    // terminal output.
-    p.CallWithTimeout("Child", "_PrintFromChild", 1000)
-
 	// Call the _Add() function present on our child plugo.
 	returnValues, _ := p.CallWithTimeout("Child", "_Add", 1000, 2, 3)
 
@@ -33,8 +28,6 @@ func main() {
 		"Result from calling _Add() function with arguments 2 and 3 :",
 		result,
 	)
-
-    // select{}
 
 	// Shut down this plugo. Removes temporary files and
 	// closes all connections.

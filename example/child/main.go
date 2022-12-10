@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/curzodo/plugo"
 	"time"
-    "fmt"
 )
 
 func main() {
@@ -12,9 +11,6 @@ func main() {
 
 	// Expose the _Add() function defined below.
 	p.Expose("_Add", _Add)
-
-    // Expose the _PrintFromChild() function defined below.
-    p.Expose("_PrintFromChild", _PrintFromChild)
 
 	// Do some fake setting up.
 	time.Sleep(time.Second)
@@ -43,8 +39,4 @@ func main() {
 
 func _Add(x, y int) int {
 	return x + y
-}
-
-func _PrintFromChild() {
-    fmt.Println("This was printed from a child plugo.")
 }
