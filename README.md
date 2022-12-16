@@ -5,7 +5,7 @@ A plugin library for Go.
 In this system, everything is a plugo. A plugo can be a parent,  a child, or both. A plugo that starts other plugos is considered a parent, and a plugo that is started by another plugo is considered a child. If one were to make a game, and then create a modding API for that game using the Plugo library, then the game program itself would be considered the parent plugo, and any mods would be considered children plugos. Because of the architecture of the Plugo library, those mods could also utilise the Plugo library and make themselves moddable.
 
 Following on from the game analogy, the following chunk of code is what the game program might look like.
-```
+```go
 package main
 
 import (
@@ -50,7 +50,7 @@ func _Message(message string) {
 Obviously, an actual game program might choose to expose functions that meaningfully impact the game, such as a function that sets the health of a player.
 
 The mod program would then look like the following.
-```
+```go
 package main
 
 import (
