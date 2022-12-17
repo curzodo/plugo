@@ -9,15 +9,22 @@ func main() {
 	// Create a plugo with Id "Parent"
 	p, _ := plugo.New("Parent")
 
-	// Expose _Message() function to connected plugos.
-	p.Expose("_Message", _Message)
+	// Expose _message() function to connected plugos.
+	p.Expose(_message)
 
 	// Start all plugos inside a folder named "plugos",
 	// or create a folder named "plugos" if none exists.
 	p.StartChildren("plugos")
 
 	// Call the _Add() function present on our child plugo.
-	returnValues, _ := p.CallWithTimeout("Child", "_Add", 1000, 2, 3)
+    var x int = 2
+    var y int = 3
+	returnValues, err := p.Call("Child", "_add", x, y)
+
+    if err != nil {
+        fmt.Println(err)
+        return
+    }
 
 	// returnValues is an array, which we know contains a
 	// single integer value because that is the output
@@ -25,7 +32,7 @@ func main() {
 	result := returnValues[0].(int)
 
 	fmt.Println(
-		"Result from calling _Add() function with arguments 2 and 3 :",
+		"Result from calling _add() function with arguments 2 and 3:",
 		result,
 	)
 
@@ -34,6 +41,6 @@ func main() {
 	p.Shutdown()
 }
 
-func _Message(message string) {
+func _message(message string) {
 	fmt.Println("Message from child plugo: ", message)
 }
