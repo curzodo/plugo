@@ -18,9 +18,8 @@ import (
 )
 
 func init() {
-    log.SetFlags(0)
+	log.SetFlags(0)
 }
-
 
 const (
 	network = "unix"
@@ -750,7 +749,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 				// Log that this plugo has successfully connected.
 				plugo.Println(
 					registrationRequest.PlugoId,
-                    "has successfully connected.",
+					"has successfully connected.",
 				)
 
 				// Initialise channel map for this plugo's connection.
@@ -889,7 +888,7 @@ func (plugo *Plugo) cleanupConnection(
 }
 
 func (plugo *Plugo) Println(args ...any) {
-    args = append([]any{plugo.Id + ":"}, args...)
+	args = append([]any{plugo.Id + ":"}, args...)
 	log.Println(args...)
 }
 

@@ -1,8 +1,8 @@
 package main
 
 import (
-    "time"
 	"github.com/curzodo/plugo"
+	"time"
 )
 
 func main() {
@@ -11,32 +11,32 @@ func main() {
 
 	// Any plugos connected to this plugo will be able to call these functions.
 	p.Expose(_reverse)
-    p.Expose(_addToCount)
+	p.Expose(_addToCount)
 
-    // Start all plugos inside the 'plugos' folder, or create a folder with that
-    // name if it does not exist. This function will block until all plugos signal
-    // that they are ready, running this function on a goroutine will bypass the
-    // blocking nature of this function, however.
+	// Start all plugos inside the 'plugos' folder, or create a folder with that
+	// name if it does not exist. This function will block until all plugos signal
+	// that they are ready, running this function on a goroutine will bypass the
+	// blocking nature of this function, however.
 	p.StartChildren("plugos")
 
-    // Call remote  functions.
-    resp, err := p.Call("Child", "_add", 2, 3)
+	// Call remote  functions.
+	resp, err := p.Call("Child", "_add", 2, 3)
 
-    if err != nil {
-        p.Println(err.Error())
-        p.Shutdown()
-        return
-    }
+	if err != nil {
+		p.Println(err.Error())
+		p.Shutdown()
+		return
+	}
 
-    // Type assert any value into int.
-    sum := resp[0].(int)
+	// Type assert any value into int.
+	sum := resp[0].(int)
 
-    p.Println("Result of calling _add is", sum)
+	p.Println("Result of calling _add is", sum)
 
-    // Wait five seconds so that the child plugo can play around with the functions
-    // this plugo has exposed, then shut down.
-    time.Sleep(5 * time.Second)
-    p.Shutdown()
+	// Wait five seconds so that the child plugo can play around with the functions
+	// this plugo has exposed, then shut down.
+	time.Sleep(5 * time.Second)
+	p.Shutdown()
 }
 
 // One should prefix all the functions one chooses to expose with an underscore.
@@ -47,13 +47,13 @@ func main() {
 
 // Takes a string argument and returns the string reversed.
 func _reverse(s string) string {
-    runes := []rune(s)
+	runes := []rune(s)
 
-    for i, j := 0, len(runes)-1; i<j; i, j = i+1, j-1 {
-        runes[i], runes[j] = runes[j], runes[i]
-    }
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
 
-    return string(runes)
+	return string(runes)
 }
 
 var count int = 0
@@ -62,6 +62,6 @@ var count int = 0
 // count. This function demonstrates that exposed functions can affect the
 // environment of their host plugo and are not self-contained.
 func _addToCount(num int) int {
-    count += num
-    return count
+	count += num
+	return count
 }
