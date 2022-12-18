@@ -822,6 +822,20 @@ func (plugo *Plugo) Expose(function any) {
 	plugo.functions[functionId] = reflect.ValueOf(function)
 }
 
+// Exposes the function just like Expose(), but uses the given Id.
+func (plugo *Plugo) ExposeId(functionId string, function any) {
+	reflectValue := reflect.ValueOf(function)
+
+	functionType := reflect.TypeOf(function).String()
+
+	if functionType == "func(...interface {}) []interface {}" {
+		plugo.typedFunctions[functionId] = function.(func(...any) []any)
+		return
+	}
+
+	plugo.functions[functionId] = reflect.ValueOf(function)
+}
+
 // This function unexposes the function with the given functionId.
 func (plugo *Plugo) Unexpose(functionId string) {
 	delete(plugo.functions, functionId)
