@@ -35,7 +35,7 @@ If your intent is to use this library to create a plugin system for a Go
 project so that other developers can extend that Go project, then I highly
 suggest that you do not directly expose your developers to Plugo, but instead
 create wrapper functions around plugo functions and have your plugin developers
-use those. An example of this is my own project, Jukebox. Jukebox is a Minecraft
+use those. An example of this is my own project, [Jukebox](https://github.com/orgs/jukebox-mc/repositories). Jukebox is a Minecraft
 server that supports plugins written in Go, however, the plugo library is
 abstracted away by what I call the Disc API, so from a plugin developer's
 perspective, the code they write is being executed on the main process directly.
