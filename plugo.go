@@ -823,8 +823,6 @@ func (plugo *Plugo) Expose(function any) {
 
 // Exposes the function just like Expose(), but uses the given Id.
 func (plugo *Plugo) ExposeId(functionId string, function any) {
-	reflectValue := reflect.ValueOf(function)
-
 	functionType := reflect.TypeOf(function).String()
 
 	if functionType == "func(...interface {}) []interface {}" {
