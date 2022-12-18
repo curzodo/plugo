@@ -1,107 +1,41 @@
 # Plugo
-A plugin library for Go.
+A plugin library for Go, designed with ease of use and minimal boilerplate in mind.
 
-# Concept & Walkthrough
-In this system, everything is a plugo. A plugo can be a parent,  a child, or both. A plugo that starts other plugos is considered a parent, and a plugo that is started by another plugo is considered a child. If one were to make a game, and then create a modding API for that game using the Plugo library, then the game program itself would be considered the parent plugo, and any mods would be considered children plugos. Because of the architecture of the Plugo library, those mods could also utilise the Plugo library and make themselves moddable.
+# How does it work?
+This library implements plugins as separate processes. Both the host process and
+the plugin process(es) are abstracted into what this library defines as 'plugos'.
+A plugo is a server that communicates with other plugos in order to provide the
+features of a traditional plugin system such as those available in Java. Plugos
+are built into executables using `go build` and then dragged into a folder within
+their parent's directory. The name of this folder depends on the name specified by
+the developer of the parent plugo. See the example/parent/plugos folder.
 
-Following on from the game analogy, the following chunk of code is what the game program might look like.
-```go
-package main
-
-import (
-	"fmt"
-	"github.com/curzodo/plugo"
-)
-
-func main() {
-	// Create a plugo with Id "Parent"
-	p, _ := plugo.New("Parent")
-
-	// Expose _Message() function to connected plugos.
-	p.Expose("_Message", _Message)
-
-	// Start all plugos inside a folder named "plugos",
-	// or create a folder named "plugos" if none exists.
-	p.StartChildren("plugos")
-
-	// Call the _Add() function present on our child plugo.
-	returnValues, _ := p.CallWithTimeout("Child", "_Add", 1000, 2, 3)
-
-	// returnValues is an array, which we know contains a
-	// single integer value because that is the output
-	// of the _Add() function. Type assert back to int.
-	result := returnValues[0].(int)
-
-	fmt.Println(
-		"Result from calling _Add() function with arguments 2 and 3 :",
-		result,
-	)
-
-	// Shut down this plugo. Removes temporary files and
-	// closes all connections.
-	p.Shutdown()
-}
-
-func _Message(message string) {
-	fmt.Println("Message from child plugo: ", message)
-}
-```
-
-Obviously, an actual game program might choose to expose functions that meaningfully impact the game, such as a function that sets the health of a player.
-
-The mod program would then look like the following.
-```go
-package main
-
-import (
-	"github.com/curzodo/plugo"
-	"time"
-)
-
-func main() {
-	// Create a plugo with the Id "Child".
-	p, _ := plugo.New("Child")
-
-	// Expose the add() function defined below.
-	p.Expose("_Add", _Add)
-
-	// Do some fake setting up.
-	time.Sleep(5 * time.Second)
-
-	// Signal to the parent plugo that this plugo is ready.
-	p.Ready()
-
-	// Call the Message() function defined in the Parent plugo.
-	p.CallWithTimeout("Parent", "_Message", 1000, "Hi Parent")
-
-	// Create a loop that tests the connection with the parent plugo.
-	// When the CheckConnection() function returns false, then the parent is
-	// no longer alive/responsive and this plugo should be shut down.
-	for {
-		parentAlive := p.CheckConnection("Parent")
-
-		if !parentAlive {
-			p.Shutdown()
-			break
-		}
-
-		// Check once every five seconds.
-		time.Sleep(5 * time.Second)
-	}
-}
-
-func _Add(x, y int) int {
-	return x + y
-}
-```
-
-The mod program is built into an executable file using ```go build``` and then this exxecutable file is dragged into whatever folder you set the parent plugo to search for children in. If you download the repo and navigate into the example/parent directory and run the command ```go run .```, then you can see this code in action.
+# Working example
+There is a working, thoroughly commented example of plugos in the /example
+directory. The parent plugo is the host process, and the child plugo is 
+its plugin. The child has been compiled into an executable using `go build` 
+and copied into the the parent's 'plugos' folder, where it's started by the parent.
+The parent can be run by running `go run .`, and its interactions with the child
+plugo will be printed out in the terminal.
 
 # Limitations
-Currently, only certain types are able to be passed to and received from remote functions, these types are: booleans, integers (int), floats (float32 and float64) and strings.
+Any values that can be encoded and decoded with encoding/gob can be sent as
+arguments to, or returned as values by, an exposed function. This includes
+structs. Error types cannot be encoded as types using encoding/gob, however,
+if the last returned value of an exposed function is of type error, then it 
+can be received by the calling plugo in the error value returned by p.Call(),
+p.CallWithContext() and p.CallWithTimeout().
 
-# Motivation
-I created this library because I wanted a fast and simple library to incorporate a plugin system to another one of my projects. I explored other options such as [gRPC](https://https://grpc.io/), Hashicorp's [go-plugin](https://github.com/hashicorp/go-plugin) and Go's very own [plugin](https://pkg.go.dev/plugin), but all of these solutions have their own drawbacks. For some, the absurd amount of boilerplate involved, and others the lack of bi-directional calling (the Plugo library allows parents to call functions on children, and children to call functions on parents).
+# Planned features
+- Secure communication between plugos using encryption
+- Exposing functions via structs
 
-# Use of ```any```
-The use of ```any``` to retrieve return values from remotely called functions is not ideal, but as far as I am aware is necessary to bypass the need for boilerplate. Typically, the Plugo library should not be exposed to users of a plugin API, but instead exposed to functions that wrap around Plugo library functions. An example of this is my [Jukebox](https://github.com/orgs/jukebox-mc/repositories) project, a Minecraft server that supports  plugins/mods written in Go. At the time of writing, Jukebox is still using an older version of Plugo.
+# Comments
+If your intent is to use this library to create a plugin system for a Go
+project so that other developers can extend that Go project, then I highly
+suggest that you do not directly expose your developers to Plugo, but instead
+create wrapper functions around plugo functions and have your plugin developers
+use those. An example of this is my own project, Jukebox. Jukebox is a Minecraft
+server that supports plugins written in Go, however, the plugo library is
+abstracted away by what I call the Disc API, so from a plugin developer's
+perspective, the code they write is being executed on the main process directly.

@@ -1,40 +1,45 @@
 package plugo
 
 import (
-    "runtime"
-    "strings"
-    "bytes"
-    "log"
+	"bytes"
 	"context"
+	"encoding/gob"
 	"errors"
-    "encoding/gob"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
+
+func init() {
+    log.SetFlags(0)
+}
+
 
 const (
 	network = "unix"
 )
 
 var (
-    datagramTypes = struct {
-        registrationRequest byte
-        registrationResponse byte
-        readySignal byte
-        functionCallRequest byte
-        functionCallResponse byte
-    } {
-        byte(0),
-        byte(1),
-        byte(2),
-        byte(3),
-        byte(4),
-    }
+	datagramTypes = struct {
+		registrationRequest  byte
+		registrationResponse byte
+		readySignal          byte
+		functionCallRequest  byte
+		functionCallResponse byte
+	}{
+		byte(0),
+		byte(1),
+		byte(2),
+		byte(3),
+		byte(4),
+	}
 
 	// If plugo A calls function f on plugo B, and before f has returned values
 	// to plugo A, plugo A calls function g on plugo B, which returns values
@@ -46,24 +51,24 @@ var (
 	rcs = make(map[*net.UnixConn]returnChannels)
 )
 
-type plugo struct {
+type Plugo struct {
 	Id               string
 	ParentId         string
-	functions map[string]reflect.Value
-    typedFunctions map[string]func(...any) []any
+	functions        map[string]reflect.Value
+	typedFunctions   map[string]func(...any) []any
 	connections      map[string]*net.UnixConn
 	listener         *net.UnixListener
 	MemoryAllocation int
 }
 
 type returnChannels struct {
-    sync.Mutex
-    m map[int]returnChannelsInner
+	sync.Mutex
+	m map[int]returnChannelsInner
 }
 
 type returnChannelsInner struct {
-    valueChannel chan []any
-    errorChannel chan error
+	valueChannel chan []any
+	errorChannel chan error
 }
 
 // Datagrams are used for inter-plugo communication. Depending on the type,
@@ -94,20 +99,20 @@ type readySignal struct {
 }
 
 type functionCallRequest struct {
-	RequestId     int
-	FunctionId    string
-	Arguments []any
+	RequestId  int
+	FunctionId string
+	Arguments  []any
 }
 
 type functionCallResponse struct {
 	ResponseId   int
 	ReturnValues []any
-    Error string
+	Error        string
 }
 
 // This function creates a plugo. plugoId should
 // be unique to avoid conflicts with other plugos.
-func New(plugoId string) (*plugo, error) {
+func New(plugoId string) (*Plugo, error) {
 	// Create a unix socket for this plugo.
 	socketDirectoryName, err := os.MkdirTemp("", "tmp")
 
@@ -131,15 +136,15 @@ func New(plugoId string) (*plugo, error) {
 	}
 
 	// Instantiate the plugo struct.
-	plugo := plugo {
+	plugo := Plugo{
 		plugoId,
 		"",
 		make(map[string]reflect.Value),
-        make(map[string]func(...any) []any),
+		make(map[string]func(...any) []any),
 		make(map[string]*net.UnixConn),
 		listener,
 		4096,
-    }
+	}
 
 	// Check if this plugo was started by another plugo.
 	if len(os.Args) < 2 {
@@ -171,17 +176,17 @@ func New(plugoId string) (*plugo, error) {
 
 // This function handles the registration process between a child and a parent,
 // from the child's point of view.
-func (plugo *plugo) registerWithParent(parentConnection *net.UnixConn) error {
+func (plugo *Plugo) registerWithParent(parentConnection *net.UnixConn) error {
 	// Construct registration request datagram.
 	payload := registrationRequest{
 		plugo.Id,
 	}
 
-    payloadBytes, err := Marshal(payload)
+	payloadBytes, err := marshal(payload)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
 	datagram := datagram{
 		datagramTypes.registrationRequest,
@@ -189,7 +194,7 @@ func (plugo *plugo) registerWithParent(parentConnection *net.UnixConn) error {
 	}
 
 	// Marshal datagram into bytes.
-	datagramBytes, err := Marshal(datagram)
+	datagramBytes, err := marshal(datagram)
 
 	if err != nil {
 		return err
@@ -215,7 +220,7 @@ func (plugo *plugo) registerWithParent(parentConnection *net.UnixConn) error {
 	}
 
 	// Unmarshal bytes into datagram.
-	err = Unmarshal(response[0:responseLength], &datagram)
+	err = unmarshal(response[0:responseLength], &datagram)
 
 	if err != nil {
 		return err
@@ -231,313 +236,313 @@ func (plugo *plugo) registerWithParent(parentConnection *net.UnixConn) error {
 
 	// Unmarshal payload into registrationRequestResponse.
 	var registrationResponse registrationResponse
-	err = Unmarshal(datagram.Payload, &registrationResponse)
+	err = unmarshal(datagram.Payload, &registrationResponse)
 
 	if err != nil {
 		return err
 	}
 
 	// Store this plugo's parent's Id and connection.
-    parentId := registrationResponse.PlugoId
+	parentId := registrationResponse.PlugoId
 	plugo.ParentId = parentId
 	plugo.connections[parentId] = parentConnection
 
-    // Initialise return channel for remote plugo connection.
-    rcs[parentConnection] = returnChannels {
-        sync.Mutex{},
-        make(map[int]returnChannelsInner),
-    }
+	// Initialise return channel for remote plugo connection.
+	rcs[parentConnection] = returnChannels{
+		sync.Mutex{},
+		make(map[int]returnChannelsInner),
+	}
 
-    // Handle future communications with the remote plugo on a separate goroutine.
-    go plugo.handleConnection(parentId, parentConnection)
+	// Handle future communications with the remote plugo on a separate goroutine.
+	go plugo.handleConnection(parentId, parentConnection)
 
 	return nil
 }
 
-func (plugo *plugo) handleConnection(
-    connectedPlugoId string,
-    connection *net.UnixConn,
+func (plugo *Plugo) handleConnection(
+	connectedPlugoId string,
+	connection *net.UnixConn,
 ) {
-    for {
-        // Allocate space for incoming datagrams.
-        datagramBytes := make([]byte, plugo.MemoryAllocation)
+	for {
+		// Allocate space for incoming datagrams.
+		datagramBytes := make([]byte, plugo.MemoryAllocation)
 
-        // Read incoming datagrams.
-        datagramLength, err := connection.Read(datagramBytes)
+		// Read incoming datagrams.
+		datagramLength, err := connection.Read(datagramBytes)
 
-        // Re-slice datagram bytes based on actual length.
-        datagramBytes = datagramBytes[0:datagramLength]
-        
-        // If there is an error with this connection, cleanup connection
-        // and terminate for loop.
-        if err != nil {
-            plugo.cleanupConnection(connectedPlugoId, connection)
-            break
-        }
+		// Re-slice datagram bytes based on actual length.
+		datagramBytes = datagramBytes[0:datagramLength]
 
-        // Handle incoming datagram bytes on separate goroutine.
-        go func() {
-            // Unmarshal datagram.
-            var datagram datagram
-            err := Unmarshal(datagramBytes, &datagram)
+		// If there is an error with this connection, cleanup connection
+		// and terminate for loop.
+		if err != nil {
+			plugo.cleanupConnection(connectedPlugoId, connection)
+			break
+		}
 
-            if err != nil {
-                return
-            }
+		// Handle incoming datagram bytes on separate goroutine.
+		go func() {
+			// Unmarshal datagram.
+			var datagram datagram
+			err := unmarshal(datagramBytes, &datagram)
 
-            // Process payload depending on datagram type.
-            switch datagram.Type {
-            case datagramTypes.functionCallRequest:
-                plugo.handleFunctionCallRequest(connection, datagram.Payload)
-            case datagramTypes.functionCallResponse:
-                handleFunctionCallResponse(connection, datagram.Payload)
-            default:
-            }
-        }()
-    }
+			if err != nil {
+				return
+			}
+
+			// Process payload depending on datagram type.
+			switch datagram.Type {
+			case datagramTypes.functionCallRequest:
+				plugo.handleFunctionCallRequest(connection, datagram.Payload)
+			case datagramTypes.functionCallResponse:
+				handleFunctionCallResponse(connection, datagram.Payload)
+			default:
+			}
+		}()
+	}
 }
 
-func (plugo *plugo) handleFunctionCallRequest(
-    connection *net.UnixConn,
-    payload []byte,
+func (plugo *Plugo) handleFunctionCallRequest(
+	connection *net.UnixConn,
+	payload []byte,
 ) {
-    // Unmarshal payload bytes into functionCall struct.
-    var functionCallRequest functionCallRequest
-    err := Unmarshal(payload, &functionCallRequest)
+	// Unmarshal payload bytes into functionCall struct.
+	var functionCallRequest functionCallRequest
+	err := unmarshal(payload, &functionCallRequest)
 
-    if err != nil {
-        return
-    }
+	if err != nil {
+		return
+	}
 
-    // Construct functionCallResponse struct.
-    functionCallResponse := functionCallResponse {
-        functionCallRequest.RequestId,
-        []any{},
-        "",
-    }
+	// Construct functionCallResponse struct.
+	functionCallResponse := functionCallResponse{
+		functionCallRequest.RequestId,
+		[]any{},
+		"",
+	}
 
-    function, ok := plugo.typedFunctions[functionCallRequest.FunctionId]
+	function, ok := plugo.typedFunctions[functionCallRequest.FunctionId]
 
-    if ok {
-        returnValues := function(functionCallRequest.Arguments)
+	if ok {
+		returnValues := function(functionCallRequest.Arguments)
 
-        // If the last argument returned is an error, then send it in the
-        // response as an error string.
-        if len(returnValues) > 0 {
-            err, ok = returnValues[len(returnValues)-1].(error)    
+		// If the last argument returned is an error, then send it in the
+		// response as an error string.
+		if len(returnValues) > 0 {
+			err, ok = returnValues[len(returnValues)-1].(error)
 
-            if ok {
-                functionCallResponse.Error = err.Error()
-            } else {
-                functionCallResponse.ReturnValues = returnValues
-            }
-        }
-    } else {
-        reflectFunction, ok := plugo.functions[functionCallRequest.FunctionId]
+			if ok {
+				functionCallResponse.Error = err.Error()
+			} else {
+				functionCallResponse.ReturnValues = returnValues
+			}
+		}
+	} else {
+		reflectFunction, ok := plugo.functions[functionCallRequest.FunctionId]
 
-        if !ok {
-            functionCallResponse.Error = "Function with Id " +
-            functionCallRequest.FunctionId +
-            " could not be found."
-        } else {
-            // Convert arguments of type any to arguments of type reflect.Value.
-            var arguments = make(
-                []reflect.Value, 
-                len(functionCallRequest.Arguments),
-            )
-            
-            for i, argument := range functionCallRequest.Arguments {
-                arguments[i] = reflect.ValueOf(argument)
-            }
+		if !ok {
+			functionCallResponse.Error = "Function with Id " +
+				functionCallRequest.FunctionId +
+				" could not be found."
+		} else {
+			// Convert arguments of type any to arguments of type reflect.Value.
+			var arguments = make(
+				[]reflect.Value,
+				len(functionCallRequest.Arguments),
+			)
 
-            reflectReturnValues := reflectFunction.Call(arguments)
+			for i, argument := range functionCallRequest.Arguments {
+				arguments[i] = reflect.ValueOf(argument)
+			}
 
-            // Convert return values to type any.
-            returnValues := make([]any, len(reflectReturnValues))
+			reflectReturnValues := reflectFunction.Call(arguments)
 
-            for i, reflectReturnValue := range reflectReturnValues {
-                returnValues[i] = reflectReturnValue.Interface()
-            }
+			// Convert return values to type any.
+			returnValues := make([]any, len(reflectReturnValues))
 
-            // If the last argument returned is an error, then send it in the
-            // response as an error string.
-            if len(returnValues) > 0 {
-                err, ok = returnValues[len(returnValues)-1].(error)    
+			for i, reflectReturnValue := range reflectReturnValues {
+				returnValues[i] = reflectReturnValue.Interface()
+			}
 
-                if ok {
-                    functionCallResponse.Error = err.Error()
-                }
+			// If the last argument returned is an error, then send it in the
+			// response as an error string.
+			if len(returnValues) > 0 {
+				err, ok = returnValues[len(returnValues)-1].(error)
 
-                functionCallResponse.ReturnValues = returnValues
-            }
-        }
-    }
+				if ok {
+					functionCallResponse.Error = err.Error()
+				} else {
+					functionCallResponse.ReturnValues = returnValues
+				}
+			}
+		}
+	}
 
-    functionCallResponseBytes, err := Marshal(functionCallResponse)
-    
-    if err != nil {
-        return
-    }
+	functionCallResponseBytes, err := marshal(functionCallResponse)
 
-    datagram := datagram {
-        datagramTypes.functionCallResponse,
-        functionCallResponseBytes,
-    }
+	if err != nil {
+		return
+	}
 
-    datagramBytes, err := Marshal(datagram)
+	datagram := datagram{
+		datagramTypes.functionCallResponse,
+		functionCallResponseBytes,
+	}
 
-    if err != nil {
-        return
-    }
+	datagramBytes, err := marshal(datagram)
 
-    connection.Write(datagramBytes)
+	if err != nil {
+		return
+	}
+
+	connection.Write(datagramBytes)
 }
 
 func handleFunctionCallResponse(connection *net.UnixConn, payload []byte) {
-    // Unmarshal payload into functionCallResponse struct.
-    var functionCallResponse functionCallResponse
-    err := Unmarshal(payload, &functionCallResponse)
+	// Unmarshal payload into functionCallResponse struct.
+	var functionCallResponse functionCallResponse
+	err := unmarshal(payload, &functionCallResponse)
 
-    if err != nil {
-        return
-    }
+	if err != nil {
+		return
+	}
 
-    responseId := functionCallResponse.ResponseId
+	responseId := functionCallResponse.ResponseId
 
-    // Get value and error channels associated with the response's Id
-    responseReturnChannels := rcs[connection].m[responseId]
+	// Get value and error channels associated with the response's Id
+	responseReturnChannels := rcs[connection].m[responseId]
 
-    // Find out if there was an error.
-    errorString := functionCallResponse.Error
+	// Find out if there was an error.
+	errorString := functionCallResponse.Error
 
-    if errorString != "" {
-        // If there was an error, then turn the error string into an
-        // error and send it down the error channel for this request.
-        responseReturnChannels.errorChannel <- errors.New(errorString)
-        return
-    }
+	if errorString != "" {
+		// If there was an error, then turn the error string into an
+		// error and send it down the error channel for this request.
+		responseReturnChannels.errorChannel <- errors.New(errorString)
+		return
+	}
 
-    responseReturnChannels.valueChannel <- functionCallResponse.ReturnValues
+	responseReturnChannels.valueChannel <- functionCallResponse.ReturnValues
 }
 
-func (plugo *plugo) Call(
-    plugoId string,
-    functionId string,
-    arguments ...any,
+func (plugo *Plugo) Call(
+	plugoId string,
+	functionId string,
+	arguments ...any,
 ) ([]any, error) {
-    returnValues, err := plugo.CallWithContext(
-        plugoId,
-        functionId,
-        context.Background(),
-        arguments...,
-    )
+	returnValues, err := plugo.CallWithContext(
+		plugoId,
+		functionId,
+		context.Background(),
+		arguments...,
+	)
 
-    if err != nil {
-        return []any{}, err
-    }
+	if err != nil {
+		return []any{}, err
+	}
 
-    return returnValues, nil
+	return returnValues, nil
 }
 
 // This function attempts to call a function with Id functionId exposed by a
 // plugo with Id plugoId with arguments.
-func (plugo *plugo) CallWithContext (
-    plugoId,
-    functionId string,
-    ctx context.Context,
-    arguments ...any,
+func (plugo *Plugo) CallWithContext(
+	plugoId,
+	functionId string,
+	ctx context.Context,
+	arguments ...any,
 ) ([]any, error) {
-    // Check if this plugo is connected to a plugo with Id plugoId.
-    connection, ok := plugo.connections[plugoId]
+	// Check if this plugo is connected to a plugo with Id plugoId.
+	connection, ok := plugo.connections[plugoId]
 
-    if !ok {
-        return []any{}, errors.New(
-            "This plugo is not connected to a plugo with Id " + plugoId + ".",
-        )
-    }
+	if !ok {
+		return []any{}, errors.New(
+			"This plugo is not connected to a plugo with Id " + plugoId + ".",
+		)
+	}
 
-    // Create channel that will wait for the remotely called function's return
-    // value(s).
-    valueChannel := make(chan []any)
+	// Create channel that will wait for the remotely called function's return
+	// value(s).
+	valueChannel := make(chan []any)
 
-    // Create a channel that will wait for an error from the remote function.
-    errorChannel := make(chan error)
+	// Create a channel that will wait for an error from the remote function.
+	errorChannel := make(chan error)
 
-    // Get data necessary for function call request datagram.
+	// Get data necessary for function call request datagram.
 
-    // Find available datagramId in the returnChannels map for the plugo to who
-    // the remote function call is being made.
-    connectionReturnChannels := rcs[connection]
-    connectionReturnChannels.Lock()
+	// Find available datagramId in the returnChannels map for the plugo to who
+	// the remote function call is being made.
+	connectionReturnChannels := rcs[connection]
+	connectionReturnChannels.Lock()
 
-    datagramId := 0
+	datagramId := 0
 
-    for {
-        _, ok := connectionReturnChannels.m[datagramId]
+	for {
+		_, ok := connectionReturnChannels.m[datagramId]
 
-        if !ok {
-            connectionReturnChannels.m[datagramId] = returnChannelsInner {
-                valueChannel,
-                errorChannel,
-            }
+		if !ok {
+			connectionReturnChannels.m[datagramId] = returnChannelsInner{
+				valueChannel,
+				errorChannel,
+			}
 
-            connectionReturnChannels.Unlock()
-            break
-        }
-        
-        datagramId++
-    }
+			connectionReturnChannels.Unlock()
+			break
+		}
 
-    // Construct payload.
-    payload := functionCallRequest {
-        datagramId,
-        functionId,
-        arguments,
-    }
+		datagramId++
+	}
 
-    payloadBytes, err := Marshal(payload)
+	// Construct payload.
+	payload := functionCallRequest{
+		datagramId,
+		functionId,
+		arguments,
+	}
 
-    if err != nil {
-        return []any{}, err
-    }
+	payloadBytes, err := marshal(payload)
 
-    // Construct datagram.
-    datagram := datagram {
-        datagramTypes.functionCallRequest,
-        payloadBytes,
-    }
+	if err != nil {
+		return []any{}, err
+	}
 
-    // Marshal datagram.
-    datagramBytes, err := Marshal(datagram)
+	// Construct datagram.
+	datagram := datagram{
+		datagramTypes.functionCallRequest,
+		payloadBytes,
+	}
 
-    if err != nil {
-        return []any{}, err
-    }
+	// Marshal datagram.
+	datagramBytes, err := marshal(datagram)
 
-    // Send datagram to plugo.
-    connection.Write(datagramBytes)
+	if err != nil {
+		return []any{}, err
+	}
 
-    // The remote function's return value bytes will be sent into the 
-    // channel that was created a couple of lines up, so wait for something
-    // to appear in that.
-    select {
-    case returnValues := <-valueChannel:
-        delete(connectionReturnChannels.m, datagramId)
-        return returnValues, nil
+	// Send datagram to plugo.
+	connection.Write(datagramBytes)
 
-    case <-ctx.Done():
-        delete(connectionReturnChannels.m, datagramId)
-        return []any{}, errors.New(
-            "The context/timeout for this call has been cancelled/reached.",
-        )
+	// The remote function's return value bytes will be sent into the
+	// channel that was created a couple of lines up, so wait for something
+	// to appear in that.
+	select {
+	case returnValues := <-valueChannel:
+		delete(connectionReturnChannels.m, datagramId)
+		return returnValues, nil
 
-    case err = <-errorChannel:
-        delete(connectionReturnChannels.m, datagramId)
-        return []any{}, err
-    }
+	case <-ctx.Done():
+		delete(connectionReturnChannels.m, datagramId)
+		return []any{}, errors.New(
+			"The context/timeout for this call has been cancelled/reached.",
+		)
+
+	case err = <-errorChannel:
+		delete(connectionReturnChannels.m, datagramId)
+		return []any{}, err
+	}
 }
 
-func (plugo *plugo) CallWithTimeout(
+func (plugo *Plugo) CallWithTimeout(
 	plugoId string,
 	functionId string,
 	milliseconds int,
@@ -558,7 +563,7 @@ func (plugo *plugo) CallWithTimeout(
 	return returnValues, err
 }
 
-func (plugo *plugo) Ready(functionId string) error {
+func (plugo *Plugo) Ready(functionId string) error {
 	connection, ok := plugo.connections[plugo.ParentId]
 
 	if !ok {
@@ -567,33 +572,33 @@ func (plugo *plugo) Ready(functionId string) error {
 		)
 	}
 
-    readySignal := readySignal {
-        functionId,
-    }
+	readySignal := readySignal{
+		functionId,
+	}
 
-    readySignalBytes, err := Marshal(readySignal)
+	readySignalBytes, err := marshal(readySignal)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
-    datagram := datagram {
-        datagramTypes.readySignal,
-        readySignalBytes,
-    }
+	datagram := datagram{
+		datagramTypes.readySignal,
+		readySignalBytes,
+	}
 
-    datagramBytes, err := Marshal(datagram)
+	datagramBytes, err := marshal(datagram)
 
-    if err != nil {
-        return err
-    }
+	if err != nil {
+		return err
+	}
 
 	connection.Write(datagramBytes)
 
 	return nil
 }
 
-func (plugo *plugo) StartChildren(folderName string) error {
+func (plugo *Plugo) StartChildren(folderName string) error {
 	// Check if folder already exists.
 	_, err := os.Stat(folderName)
 
@@ -605,13 +610,13 @@ func (plugo *plugo) StartChildren(folderName string) error {
 			return err
 		}
 
-        startChildren := func() {
-            for _, childPlugo := range childPlugos {
-			    plugo.start(folderName + "/" + childPlugo.Name())
-		    }
-        }
+		startChildren := func() {
+			for _, childPlugo := range childPlugos {
+				plugo.start(folderName + "/" + childPlugo.Name())
+			}
+		}
 
-        done := plugo.handleRegistration(startChildren)
+		done := plugo.handleRegistration(startChildren)
 
 		// Wait for registration process to complete.
 		<-done
@@ -627,10 +632,10 @@ func (plugo *plugo) StartChildren(folderName string) error {
 		return err
 	}
 
-    return nil
+	return nil
 }
 
-func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
+func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 	// Create a wait group to wait for each plugo that registers
 	// to signal that it is ready.
 	var waitGroup sync.WaitGroup
@@ -645,7 +650,7 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 				continue
 			}
 
-            // New goroutine for each connection.
+			// New goroutine for each connection.
 			go func() {
 				datagramBytes := make([]byte, plugo.MemoryAllocation)
 
@@ -659,10 +664,10 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 				// Unmarshal bytes into datagram.
 				var datagram datagram
 
-				err = Unmarshal(
-                    datagramBytes[0:datagramBytesLength], 
-                    &datagram,
-                )
+				err = unmarshal(
+					datagramBytes[0:datagramBytesLength],
+					&datagram,
+				)
 
 				if err != nil {
 					return
@@ -675,7 +680,7 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 
 				// Unmarshal payload bytes into registrationRequest.
 				var registrationRequest registrationRequest
-				err = Unmarshal(datagram.Payload, &registrationRequest)
+				err = unmarshal(datagram.Payload, &registrationRequest)
 
 				if err != nil {
 					return
@@ -689,20 +694,20 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 					plugo.Id,
 				}
 
-                payloadBytes, err := Marshal(payload)
+				payloadBytes, err := marshal(payload)
 
-                if err != nil {
-                    return
-                }
+				if err != nil {
+					return
+				}
 
-                datagram.Type = datagramTypes.registrationResponse
+				datagram.Type = datagramTypes.registrationResponse
 				datagram.Payload = payloadBytes
 
-                datagramBytes, err = Marshal(datagram)
+				datagramBytes, err = marshal(datagram)
 
-                if err != nil {
-                    return
-                }
+				if err != nil {
+					return
+				}
 
 				connection.Write(datagramBytes)
 
@@ -713,11 +718,11 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 				datagramBytesLength, err = connection.Read(datagramBytes)
 
 				if err != nil {
-                    return
+					return
 				}
 
 				// Unmarshal bytes into datagram.
-                err = Unmarshal(datagramBytes[0:datagramBytesLength], &datagram)
+				err = unmarshal(datagramBytes[0:datagramBytesLength], &datagram)
 
 				if err != nil {
 					return
@@ -730,7 +735,7 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 
 				// Unmarshal payload bytes into readySignal.
 				var readySignal readySignal
-				err = Unmarshal(datagram.Payload, &readySignal)
+				err = unmarshal(datagram.Payload, &readySignal)
 
 				if err != nil {
 					return
@@ -742,54 +747,55 @@ func (plugo *plugo) handleRegistration(startChildren func()) chan bool {
 				// Store connectedPlugoId and connection..
 				plugo.connections[connectedPlugoId] = connection
 
-                // Log that this plugo has successfully connected.
-                log.Println(
-                    registrationRequest.PlugoId + " has successfully connected.",
-                )
+				// Log that this plugo has successfully connected.
+				plugo.Println(
+					registrationRequest.PlugoId,
+                    "has successfully connected.",
+				)
 
-                // Initialise channel map for this plugo's connection.
-                rcs[connection] = returnChannels {
-                    sync.Mutex{},
-                    make(map[int]returnChannelsInner),
-                }
+				// Initialise channel map for this plugo's connection.
+				rcs[connection] = returnChannels{
+					sync.Mutex{},
+					make(map[int]returnChannelsInner),
+				}
 
-                go plugo.handleConnection(connectedPlugoId, connection)
+				go plugo.handleConnection(connectedPlugoId, connection)
 
 				waitGroup.Done()
 			}()
 		}
 	}()
 
-    startChildren()
+	startChildren()
 
 	// Sleep for one hundred milliseconds to allow plugos to register.
 	time.Sleep(100 * time.Millisecond)
 
-    done := make(chan bool)
+	done := make(chan bool)
 
-    go func() {
-	    // Wait for all registered plugos to signal that they are ready.
-	    waitGroup.Wait()
+	go func() {
+		// Wait for all registered plugos to signal that they are ready.
+		waitGroup.Wait()
 
-        // Call all requested functions. Wait for responses.
-        for plugoId, functionId := range functionCallRequests {
-            _, err := plugo.Call(plugoId, functionId)
+		// Call all requested functions. Wait for responses.
+		for plugoId, functionId := range functionCallRequests {
+			_, err := plugo.Call(plugoId, functionId)
 
-            if err != nil {
-                log.Println(plugoId + ": " + err.Error())
-            }
-        }
+			if err != nil {
+				log.Println(plugoId + ": " + err.Error())
+			}
+		}
 
-	    // Signal to main thread that the registration process is complete.
-	    done <- true
-    }()
+		// Signal to main thread that the registration process is complete.
+		done <- true
+	}()
 
-    return done
+	return done
 }
 
 // This function starts and attempts to connect to another plugo.
 // Path is the path to an executable.
-func (plugo *plugo) start(path string) {
+func (plugo *Plugo) start(path string) {
 	cmd := exec.Command(path, plugo.Id, plugo.listener.Addr().String())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -800,11 +806,11 @@ func (plugo *plugo) start(path string) {
 // type func(...any) []any it will be not be called using reflect, resulting
 // in better performance. functionId is the Id through which other
 // plugos may call the function using the plugo.Call() function.
-func (plugo *plugo) Expose(function any) {
-    reflectValue := reflect.ValueOf(function)
-    functionId := strings.Split(
-        runtime.FuncForPC(reflectValue.Pointer()).Name(), ".",
-    )[1]
+func (plugo *Plugo) Expose(function any) {
+	reflectValue := reflect.ValueOf(function)
+	functionId := strings.Split(
+		runtime.FuncForPC(reflectValue.Pointer()).Name(), ".",
+	)[1]
 
 	functionType := reflect.TypeOf(function).String()
 
@@ -817,20 +823,20 @@ func (plugo *plugo) Expose(function any) {
 }
 
 // This function unexposes the function with the given functionId.
-func (plugo *plugo) Unexpose(functionId string) {
+func (plugo *Plugo) Unexpose(functionId string) {
 	delete(plugo.functions, functionId)
 	delete(plugo.typedFunctions, functionId)
 }
 
 // This function gracefully shuts the plugo down. It stops listening
 // for incoming connections and closes all existing connections.
-func (plugo *plugo) Shutdown() {
+func (plugo *Plugo) Shutdown() {
 	// Obtain socket address from listener.
 	socketAddress := plugo.listener.Addr().String()
 
 	// Close all stored connections.
 	for connectedPlugoId, connection := range plugo.connections {
-        plugo.cleanupConnection(connectedPlugoId, connection)
+		plugo.cleanupConnection(connectedPlugoId, connection)
 	}
 
 	// Close listener.
@@ -841,34 +847,39 @@ func (plugo *plugo) Shutdown() {
 	os.Remove(directoryPath)
 }
 
-func (plugo *plugo) CheckConnection(connectedPlugoId string) bool {
+func (plugo *Plugo) CheckConnection(connectedPlugoId string) bool {
 	_, ok := plugo.connections[connectedPlugoId]
 	return ok
 }
 
-func (plugo *plugo) cleanupConnection(
-    connectedPlugoId string,
-    connection *net.UnixConn,
+func (plugo *Plugo) cleanupConnection(
+	connectedPlugoId string,
+	connection *net.UnixConn,
 ) {
-    // Remove connection from connection array.
-    delete(plugo.connections, connectedPlugoId)
+	// Remove connection from connection array.
+	delete(plugo.connections, connectedPlugoId)
 
-    // For each return channel, return an error.
-    for _, returnChannelsInner := range rcs[connection].m {
-        errorChannel := returnChannelsInner.errorChannel
+	// For each return channel, return an error.
+	for _, returnChannelsInner := range rcs[connection].m {
+		errorChannel := returnChannelsInner.errorChannel
 
-        errorChannel <- errors.New(
-            "The connection associated with this function call is closed.",
-        )
-    }
+		errorChannel <- errors.New(
+			"The connection associated with this function call is closed.",
+		)
+	}
 
-    delete(rcs, connection)
+	delete(rcs, connection)
 
-    // Close connection.
-    connection.Close()
+	// Close connection.
+	connection.Close()
 }
 
-func Marshal(v interface{}) ([]byte, error) {
+func (plugo *Plugo) Println(args ...any) {
+    args = append([]any{plugo.Id + ":"}, args...)
+	log.Println(args...)
+}
+
+func marshal(v interface{}) ([]byte, error) {
 	b := new(bytes.Buffer)
 	err := gob.NewEncoder(b).Encode(v)
 
@@ -879,7 +890,7 @@ func Marshal(v interface{}) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func Unmarshal(data []byte, v interface{}) error {
+func unmarshal(data []byte, v interface{}) error {
 	b := bytes.NewBuffer(data)
 
 	return gob.NewDecoder(b).Decode(v)
