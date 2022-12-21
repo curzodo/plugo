@@ -10,7 +10,7 @@ func main() {
 	p, _ := plugo.New("Parent")
 
 	// Any plugos connected to this plugo will be able to call these functions.
-	p.Expose(_reverse)
+	p.ExposeId("_reverse", _reverse)
 	p.Expose(_addToCount)
 
 	// Start all plugos inside the 'plugos' folder, or create a folder with that

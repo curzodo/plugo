@@ -781,7 +781,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 			_, err := plugo.Call(plugoId, functionId)
 
 			if err != nil {
-				log.Println(plugoId + ": " + err.Error())
+				p.Println(err.Error())
 			}
 		}
 
