@@ -778,6 +778,10 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 
 		// Call all requested functions. Wait for responses.
 		for plugoId, functionId := range functionCallRequests {
+            if functionId == "" {
+                continue
+            }
+
 			_, err := plugo.Call(plugoId, functionId)
 
 			if err != nil {
