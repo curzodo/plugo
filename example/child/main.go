@@ -11,7 +11,7 @@ func main() {
 	p, err := plugo.New("Child")
 
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println(err.Error())
 		return
 	}
 

@@ -17,7 +17,13 @@ func main() {
 	// name if it does not exist. This function will block until all plugos signal
 	// that they are ready, running this function on a goroutine will bypass the
 	// blocking nature of this function, however.
-	p.StartChildren("plugos")
+	exposedFunctions, _ := p.StartChildren("plugos")
+
+	// exposedFunctions is a map that contains what functions each connected plugo
+	// has exposed. You can use this to enforce that plugos follow a certain
+	// implementation. For example, if a plugo does notexpose the function _init(),
+	// then one could Disconnect() them.
+	p.Println(exposedFunctions)
 
 	// Call remote  functions.
 	resp, err := p.Call("Child", "_add", 2, 3)

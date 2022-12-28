@@ -53,10 +53,10 @@ var (
 type Plugo struct {
 	Id               string
 	ParentId         string
-	functions        map[string]reflect.Value
-	typedFunctions   map[string]func(...any) []any
-	connections      map[string]*net.UnixConn
-	listener         *net.UnixListener
+	Functions        map[string]reflect.Value
+	TypedFunctions   map[string]func(...any) []any
+	Connections      map[string]*net.UnixConn
+	Listener         *net.UnixListener
 	MemoryAllocation int
 }
 
@@ -94,7 +94,8 @@ type registrationResponse struct {
 // execution. It sends an array of function names that the parent should
 // call on the child.
 type readySignal struct {
-	FunctionId string
+	FunctionId       string
+	ExposedFunctions []string
 }
 
 type functionCallRequest struct {
@@ -244,7 +245,7 @@ func (plugo *Plugo) registerWithParent(parentConnection *net.UnixConn) error {
 	// Store this plugo's parent's Id and connection.
 	parentId := registrationResponse.PlugoId
 	plugo.ParentId = parentId
-	plugo.connections[parentId] = parentConnection
+	plugo.Connections[parentId] = parentConnection
 
 	// Initialise return channel for remote plugo connection.
 	rcs[parentConnection] = returnChannels{
@@ -275,7 +276,7 @@ func (plugo *Plugo) handleConnection(
 		// If there is an error with this connection, cleanup connection
 		// and terminate for loop.
 		if err != nil {
-			plugo.cleanupConnection(connectedPlugoId, connection)
+			plugo.Disconnect(connectedPlugoId)
 			break
 		}
 
@@ -320,7 +321,7 @@ func (plugo *Plugo) handleFunctionCallRequest(
 		"",
 	}
 
-	function, ok := plugo.typedFunctions[functionCallRequest.FunctionId]
+	function, ok := plugo.TypedFunctions[functionCallRequest.FunctionId]
 
 	if ok {
 		returnValues := function(functionCallRequest.Arguments)
@@ -337,7 +338,7 @@ func (plugo *Plugo) handleFunctionCallRequest(
 			}
 		}
 	} else {
-		reflectFunction, ok := plugo.functions[functionCallRequest.FunctionId]
+		reflectFunction, ok := plugo.Functions[functionCallRequest.FunctionId]
 
 		if !ok {
 			functionCallResponse.Error = "Function with Id " +
@@ -452,7 +453,7 @@ func (plugo *Plugo) CallWithContext(
 	arguments ...any,
 ) ([]any, error) {
 	// Check if this plugo is connected to a plugo with Id plugoId.
-	connection, ok := plugo.connections[plugoId]
+	connection, ok := plugo.Connections[plugoId]
 
 	if !ok {
 		return []any{}, errors.New(
@@ -563,7 +564,7 @@ func (plugo *Plugo) CallWithTimeout(
 }
 
 func (plugo *Plugo) Ready(functionId string) error {
-	connection, ok := plugo.connections[plugo.ParentId]
+	connection, ok := plugo.Connections[plugo.ParentId]
 
 	if !ok {
 		return errors.New(
@@ -571,8 +572,21 @@ func (plugo *Plugo) Ready(functionId string) error {
 		)
 	}
 
+	// Send a list of all the functions this plugo has
+	// exposed to the parent.
+	exposedFunctions := make([]string, 0, 64)
+
+	for key, _ := range plugo.Functions {
+		exposedFunctions = append(exposedFunctions, key)
+	}
+
+	for key, _ := range plugo.TypedFunctions {
+		exposedFunctions = append(exposedFunctions, key)
+	}
+
 	readySignal := readySignal{
 		functionId,
+		exposedFunctions,
 	}
 
 	readySignalBytes, err := marshal(readySignal)
@@ -597,16 +611,16 @@ func (plugo *Plugo) Ready(functionId string) error {
 	return nil
 }
 
-func (plugo *Plugo) StartChildren(folderName string) error {
+func (plugo *Plugo) StartChildren(folderName string) (map[string][]string, error) {
 	// Check if folder already exists.
 	_, err := os.Stat(folderName)
 
 	// If the folder already exists, start all of the plugos inside.
 	if err == nil {
-		childPlugos, _ := os.ReadDir(folderName)
+		childPlugos, err := os.ReadDir(folderName)
 
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		startChildren := func() {
@@ -618,9 +632,9 @@ func (plugo *Plugo) StartChildren(folderName string) error {
 		done := plugo.handleRegistration(startChildren)
 
 		// Wait for registration process to complete.
-		<-done
+		exposedFunctions := <-done
 
-		return nil
+		return exposedFunctions, nil
 	}
 
 	// If the error is that the folder does not exist, then create the folder.
@@ -628,22 +642,23 @@ func (plugo *Plugo) StartChildren(folderName string) error {
 		// Create folder
 		os.Mkdir(folderName, os.ModePerm)
 	} else if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return make(map[string][]string), nil
 }
 
-func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
+func (plugo *Plugo) handleRegistration(startChildren func()) chan map[string][]string {
 	// Create a wait group to wait for each plugo that registers
 	// to signal that it is ready.
 	var waitGroup sync.WaitGroup
 
 	functionCallRequests := make(map[string]string)
+	exposedFunctions := make(map[string][]string)
 
 	go func() {
 		for {
-			connection, err := plugo.listener.AcceptUnix()
+			connection, err := plugo.Listener.AcceptUnix()
 
 			if err != nil {
 				continue
@@ -686,7 +701,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 				}
 
 				connectedPlugoId := registrationRequest.PlugoId
-				plugo.connections[connectedPlugoId] = connection
+				plugo.Connections[connectedPlugoId] = connection
 
 				// Respond with registrationResponse.
 				payload := registrationResponse{
@@ -714,6 +729,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 				waitGroup.Add(1)
 
 				// Wait for ready signal.
+				datagramBytes = make([]byte, plugo.MemoryAllocation)
 				datagramBytesLength, err = connection.Read(datagramBytes)
 
 				if err != nil {
@@ -721,7 +737,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 				}
 
 				// Unmarshal bytes into datagram.
-				err = unmarshal(datagramBytes[0:datagramBytesLength], &datagram)
+				err = unmarshal(datagramBytes[:datagramBytesLength], &datagram)
 
 				if err != nil {
 					return
@@ -741,10 +757,14 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 				}
 
 				// Store function call requests.
-				functionCallRequests[connectedPlugoId] = readySignal.FunctionId
+				if readySignal.FunctionId != "" {
+					functionCallRequests[connectedPlugoId] = readySignal.FunctionId
+				}
+
+				exposedFunctions[connectedPlugoId] = readySignal.ExposedFunctions
 
 				// Store connectedPlugoId and connection..
-				plugo.connections[connectedPlugoId] = connection
+				plugo.Connections[connectedPlugoId] = connection
 
 				// Log that this plugo has successfully connected.
 				plugo.Println(
@@ -765,12 +785,14 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 		}
 	}()
 
+	// Start children plugos after 10ms.
+	time.Sleep(5 * time.Millisecond)
 	startChildren()
 
 	// Sleep for one hundred milliseconds to allow plugos to register.
 	time.Sleep(100 * time.Millisecond)
 
-	done := make(chan bool)
+	done := make(chan map[string][]string)
 
 	go func() {
 		// Wait for all registered plugos to signal that they are ready.
@@ -778,19 +800,19 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 
 		// Call all requested functions. Wait for responses.
 		for plugoId, functionId := range functionCallRequests {
-            if functionId == "" {
-                continue
-            }
+			if functionId == "" {
+				continue
+			}
 
 			_, err := plugo.Call(plugoId, functionId)
 
 			if err != nil {
-				p.Println(err.Error())
+				plugo.Println(err.Error())
 			}
 		}
 
 		// Signal to main thread that the registration process is complete.
-		done <- true
+		done <- exposedFunctions
 	}()
 
 	return done
@@ -799,7 +821,7 @@ func (plugo *Plugo) handleRegistration(startChildren func()) chan bool {
 // This function starts and attempts to connect to another plugo.
 // Path is the path to an executable.
 func (plugo *Plugo) start(path string) {
-	cmd := exec.Command(path, plugo.Id, plugo.listener.Addr().String())
+	cmd := exec.Command(path, plugo.Id, plugo.Listener.Addr().String())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Start()
@@ -811,18 +833,21 @@ func (plugo *Plugo) start(path string) {
 // plugos may call the function using the plugo.Call() function.
 func (plugo *Plugo) Expose(function any) {
 	reflectValue := reflect.ValueOf(function)
-	functionId := strings.Split(
+
+	split := strings.Split(
 		runtime.FuncForPC(reflectValue.Pointer()).Name(), ".",
-	)[1]
+	)
+
+	functionId := split[len(split)-1]
 
 	functionType := reflect.TypeOf(function).String()
 
 	if functionType == "func(...interface {}) []interface {}" {
-		plugo.typedFunctions[functionId] = function.(func(...any) []any)
+		plugo.TypedFunctions[functionId] = function.(func(...any) []any)
 		return
 	}
 
-	plugo.functions[functionId] = reflect.ValueOf(function)
+	plugo.Functions[functionId] = reflect.ValueOf(function)
 }
 
 // Exposes the function just like Expose(), but uses the given Id.
@@ -830,32 +855,32 @@ func (plugo *Plugo) ExposeId(functionId string, function any) {
 	functionType := reflect.TypeOf(function).String()
 
 	if functionType == "func(...interface {}) []interface {}" {
-		plugo.typedFunctions[functionId] = function.(func(...any) []any)
+		plugo.TypedFunctions[functionId] = function.(func(...any) []any)
 		return
 	}
 
-	plugo.functions[functionId] = reflect.ValueOf(function)
+	plugo.Functions[functionId] = reflect.ValueOf(function)
 }
 
 // This function unexposes the function with the given functionId.
 func (plugo *Plugo) Unexpose(functionId string) {
-	delete(plugo.functions, functionId)
-	delete(plugo.typedFunctions, functionId)
+	delete(plugo.Functions, functionId)
+	delete(plugo.TypedFunctions, functionId)
 }
 
 // This function gracefully shuts the plugo down. It stops listening
 // for incoming connections and closes all existing connections.
 func (plugo *Plugo) Shutdown() {
 	// Obtain socket address from listener.
-	socketAddress := plugo.listener.Addr().String()
+	socketAddress := plugo.Listener.Addr().String()
 
 	// Close all stored connections.
-	for connectedPlugoId, connection := range plugo.connections {
-		plugo.cleanupConnection(connectedPlugoId, connection)
+	for connectedPlugoId, _ := range plugo.Connections {
+		plugo.Disconnect(connectedPlugoId)
 	}
 
 	// Close listener.
-	plugo.listener.Close()
+	plugo.Listener.Close()
 
 	// Delete temporary directory.
 	directoryPath := filepath.Dir(socketAddress)
@@ -863,16 +888,19 @@ func (plugo *Plugo) Shutdown() {
 }
 
 func (plugo *Plugo) CheckConnection(connectedPlugoId string) bool {
-	_, ok := plugo.connections[connectedPlugoId]
+	_, ok := plugo.Connections[connectedPlugoId]
 	return ok
 }
 
-func (plugo *Plugo) cleanupConnection(
-	connectedPlugoId string,
-	connection *net.UnixConn,
-) {
+func (plugo *Plugo) Disconnect(plugoId string) {
+	connection, ok := plugo.Connections[plugoId]
+
+	if !ok {
+		return
+	}
+
 	// Remove connection from connection array.
-	delete(plugo.connections, connectedPlugoId)
+	delete(plugo.Connections, plugoId)
 
 	// For each return channel, return an error.
 	for _, returnChannelsInner := range rcs[connection].m {
