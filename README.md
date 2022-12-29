@@ -20,7 +20,7 @@ plugo will be printed out in the terminal.
 
 # Limitations
 Any values that can be encoded and decoded with encoding/gob can be sent as
-arguments to, or returned as values by, an exposed function. This includes
+arguments to, or returned as values by, an exposed function. This excludes
 structs. Error types cannot be encoded as types using encoding/gob, however,
 if the last returned value of an exposed function is of type error, then it 
 can be received by the calling plugo in the error value returned by p.Call(),
