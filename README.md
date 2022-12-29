@@ -29,6 +29,7 @@ p.CallWithContext() and p.CallWithTimeout().
 # Planned features
 - Secure communication between plugos using encryption
 - Exposing functions via structs
+- Sending/receiving structs to/from functions as arguments/return values
 
 # Comments
 If your intent is to use this library to create a plugin system for a Go
